@@ -1,0 +1,20 @@
+molecular function
+enzyme
+pathway
+cellular component:enzyme source
+anatomical entity
+drug
+gene
+other
+protein
+anatomical entity:enzyme source:biological process
+enzyme source
+anatomical entity:enzyme source
+pathway:biological process
+disease:enzyme source
+cellular component
+disease:pathway
+biological process
+disease
+gene:protein
+enzyme source:biological process

@@ -33,7 +33,7 @@ if len(sys.argv) >= 5:
     nodesPath = sys.argv[3]
     edgesPath = sys.argv[4]
 if len(sys.argv) == 4 or len(sys.argv) > 5:
-    print("Usage: spark-submit base_hits.py [num_iter] [weight_col] [nodes_csv] [edges_csv]")
+    print("Usage: spark-submit weighted_hits.py [num_iter] [weight_col] [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath)
