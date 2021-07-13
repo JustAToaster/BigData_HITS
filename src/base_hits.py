@@ -24,9 +24,9 @@ nodesPath = '../data/nodes_elab.csv'
 edgesPath = '../data/edges_elab.csv'
 num_iter = 8
 
-if len(sys.argv) == 2:
+if len(sys.argv) >= 2:
     num_iter = int(sys.argv[1])
-if len(sys.argv) == 4:
+if len(sys.argv) >= 4:
     nodesPath = sys.argv[2]
     edgesPath = sys.argv[3]
 if len(sys.argv) == 3 or len(sys.argv) > 4:
@@ -71,8 +71,9 @@ for i in range(num_iter):
 hubs = hubs.sortBy(lambda x: x[1], ascending=False)
 auths = auths.sortBy(lambda x: x[1], ascending=False)
 
-hubs.saveAsTextFile("../outputs/base_hub_scores.txt")
-auths.saveAsTextFile("../outputs/base_authority_scores.txt")
+# For simplicity's sake, scores are saved as a single file (not recommended with a big dataset in a distributed environment)
+hubs.coalesce(1, False).saveAsTextFile("../outputs/base_hub_scores.txt")
+auths.coalesce(1, False).saveAsTextFile("../outputs/base_authority_scores.txt")
 
 # Take the top 50 hubs and authorities
 hubs_dict = dict(hubs.take(50))
@@ -149,10 +150,15 @@ G.add_nodes_from(hubs_dict.keys())
 G.add_nodes_from(nodes_dict.keys())
 
 # Color hub nodes in red, authority nodes in blue, nodes that are both hub and authorities in purple and other nodes in grey
-node_colors = ['purple' if node in hubs_dict and node in auths_dict else 'red' if node in hubs_dict else 'blue' if node in auths_dict else 'grey' for node in G.nodes()]
+node_colors = ['purple' if node in hubs_dict and node in auths_dict \
+    else 'red' if node in hubs_dict \
+    else 'blue' if node in auths_dict \
+    else 'grey' for node in G.nodes()]
 
 # Make node size proportional to authority score if in the top 50, else use a fixed 500 size
-node_sizes = [hubs_dict[node] * 10000 if node in hubs_dict else auths_dict[node] * 10000 if node in auths_dict else 500 for node in G.nodes()]
+node_sizes = [hubs_dict[node] * 10000 if node in hubs_dict \
+    else auths_dict[node] * 10000 if node in auths_dict \
+    else 500 for node in G.nodes()]
 
 pos = nx.spring_layout(G)
 nx.draw_networkx_nodes(G, pos, cmap=plt.get_cmap('jet'), node_color=node_colors, node_size=node_sizes)
