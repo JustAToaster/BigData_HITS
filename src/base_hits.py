@@ -45,11 +45,6 @@ edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 
 auths, hubs = initialize_hits(nodes)
 
-print("Nodes:")
-print(nodes.take(10))
-print("Edges: ")
-print(edges.take(10))
-
 print("Hub scores:")
 print(hubs.take(10))
 print("Authority scores:")

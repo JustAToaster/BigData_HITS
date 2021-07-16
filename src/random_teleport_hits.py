@@ -53,21 +53,16 @@ print(nodes.take(10))
 print("Edges: ")
 print(edges.take(10))
 
-print("Hub scores:")
-print(hubs.take(10))
-print("Authority scores:")
-print(auths.take(10))
-
 hubSum = authSum = num_nodes/(math.sqrt(num_nodes))
 
 for i in range(num_iter):
     print("Iteration ", str(i+1))
 
     # Hub: for each node a, accumulate authority scores from all links of the form (a,b)
-    hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + (1-beta)*authSum)
+    hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + ((1-beta)/num_nodes)*authSum)
     
     # Authority: for each node b, accumulate hub scores from all links of the form (a,b)
-    auths = edges.join(hubs).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + (1-beta)*hubSum)
+    auths = edges.join(hubs).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + ((1-beta)/num_nodes)*hubSum)
 
     # Normalize scores
     hubs = normalize_rdd(hubs)

@@ -60,11 +60,6 @@ print(nodes.take(10))
 print("Edges: ")
 print(edges.take(10))
 
-print("Hub scores:")
-print(hubs.take(10))
-print("Authority scores:")
-print(auths.take(10))
-
 for i in range(num_iter):
     print("Iteration ", str(i+1))
 
