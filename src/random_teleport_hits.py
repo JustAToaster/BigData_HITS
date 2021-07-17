@@ -7,15 +7,19 @@ from pyspark.sql.functions import col
 import networkx as nx
 import matplotlib.pyplot as plt
 
-def initialize_hits(nodes, num_nodes):
-    auths = nodes.map(lambda node: (node[0], 1.0/math.sqrt(num_nodes)))
+def initialize_hits(nodesDF, edgesDF, num_nodes):
+    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree")
+    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree")
+    degreesDF = out_degreesDF.join(in_degreesDF, in_degreesDF.dst_id == out_degreesDF.src_id).select("src_id", "in_degree", "out_degree")
+    # Associate each node with its out-degree and in-degree
+    auths = nodesDF.join(degreesDF, degreesDF.src_id == nodesDF.id).rdd.map(lambda node: (node[0], (1.0/math.sqrt(num_nodes), node[2], node[3])))
     hubs = auths
     return auths, hubs
 
 def normalize_rdd(rdd):
-    rdd_norm_squared = rdd.map(lambda x: (0, x[1]*x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
+    rdd_norm_squared = rdd.map(lambda x: (0, x[1][0]*x[1][0])).reduceByKey(lambda x, y: x + y).collect()[0][1]
     rdd_norm = math.sqrt(rdd_norm_squared)
-    return rdd.map(lambda x: (x[0], x[1] / rdd_norm))
+    return rdd.map(lambda x: (x[0], (x[1][0] / rdd_norm, x[1][1], x[1][2])))
 
 conf = SparkConf().setMaster("local[*]")
 sc = SparkContext(conf=conf)
@@ -38,39 +42,38 @@ spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath)
 edgesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(edgesPath)
 
+nodesDF = nodesDF.withColumnRenamed("id:ID", "id").select("id")
+edgesDF = edgesDF.withColumnRenamed("src:START_ID", "src_id").withColumnRenamed("dst:END_ID", "dst_id")
+
 nodes = nodesDF.rdd
 num_nodes = nodes.count()
-edges = edgesDF.select("src:START_ID", "dst:END_ID").rdd.map(lambda edge: (edge[0], edge[1]))
+edgesDF = edgesDF.select("src_id", "dst_id")
+edges = edgesDF.rdd.map(lambda edge: (edge[0], edge[1]))
 edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 
 #edges.saveAsTextFile("../outputs/edges.txt")
-#edgesT.saveAsTextFile("../outputs/edgesT.txt")
+#edgesT.saveAsTextFile("../outputs/edgesT.txt"
 
-auths, hubs = initialize_hits(nodes, num_nodes)
+auths, hubs = initialize_hits(nodesDF, edgesDF, num_nodes)
 
 print("Nodes:")
 print(nodes.take(10))
 print("Edges: ")
 print(edges.take(10))
 
-hubSum = authSum = num_nodes/(math.sqrt(num_nodes))
+# hubSum = authSum = num_nodes/(math.sqrt(num_nodes))
 
 for i in range(num_iter):
     print("Iteration ", str(i+1))
 
-    # Hub: for each node a, accumulate authority scores from all links of the form (a,b)
-    hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + ((1-beta)/num_nodes)*authSum)
-    
-    # Authority: for each node b, accumulate hub scores from all links of the form (a,b)
-    auths = edges.join(hubs).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + ((1-beta)/num_nodes)*hubSum)
+    #Hub: for each node a, accumulate authority scores from all links of the form (a,b). Divide by each in-degree.
+    hubs = edgesT.join(auths).map(lambda x: (x[1][0], (x[1][1][0]/x[1][1][1], x[1][1][1], x[1][1][2]))).reduceByKey(lambda x, y: (x[0] + y[0], x[1], x[2])).mapValues(lambda score: (beta*score[0] + ((1-beta)/(2*num_nodes)), score[1], score[2]))
+    # Authority: for each node b, accumulate hub scores from all links of the form (a,b). Divide by each out-degree.
+    auths = edges.join(hubs).map(lambda x: (x[1][0], (x[1][1][0]/x[1][1][2], x[1][1][1], x[1][1][2]))).reduceByKey(lambda x, y: (x[0] + y[0], x[1], x[2])).mapValues(lambda score: (beta*score[0] + ((1-beta)/(2*num_nodes)), score[1], score[2]))
 
     # Normalize scores
     hubs = normalize_rdd(hubs)
     auths = normalize_rdd(auths)
-
-    if i == 0:
-        hubSum = hubs.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
-        authSum = auths.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
 
 hubs = hubs.sortBy(lambda x: x[1], ascending=False)
 auths = auths.sortBy(lambda x: x[1], ascending=False)
@@ -79,9 +82,12 @@ auths = auths.sortBy(lambda x: x[1], ascending=False)
 hubs.coalesce(1, False).saveAsTextFile("../outputs/teleport_hub_scores.txt")
 auths.coalesce(1, False).saveAsTextFile("../outputs/teleport_authority_scores.txt")
 
+hubs = hubs.map(lambda x: (x[0], x[1][0]))
+auths = auths.map(lambda x: (x[0], x[1][0]))
+
 # Take the top 50 hubs and authorities
-hubs_dict = dict(hubs.take(50))
-auths_dict = dict(auths.take(50))
+hubs_dict = dict((hubs).take(50))
+auths_dict = dict((auths).take(50))
 
 # Sample nodes and edges from the graph
 nodes_dict = dict(hubs.sample(False, 0.01, 81).collect())
