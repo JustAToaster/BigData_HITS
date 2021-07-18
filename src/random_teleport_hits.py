@@ -10,16 +10,17 @@ import matplotlib.pyplot as plt
 def initialize_hits(nodesDF, edgesDF, num_nodes):
     out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree")
     in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree")
-    degreesDF = out_degreesDF.join(in_degreesDF, in_degreesDF.dst_id == out_degreesDF.src_id).select("src_id", "in_degree", "out_degree")
+    degreesDF = out_degreesDF.join(in_degreesDF, in_degreesDF.dst_id == out_degreesDF.src_id).select("src_id", "in_degree", "out_degree").withColumnRenamed("src_id", "id")
     # Associate each node with its out-degree and in-degree
-    auths = nodesDF.join(degreesDF, degreesDF.src_id == nodesDF.id).rdd.map(lambda node: (node[0], (1.0/math.sqrt(num_nodes), node[2], node[3])))
+    auths = nodesDF.join(degreesDF, degreesDF.id == nodesDF.id).rdd.map(lambda node: (node[0], (1.0/math.sqrt(num_nodes), (node[2], node[3]))))
     hubs = auths
-    return auths, hubs
+    degrees = degreesDF.rdd.map(lambda x: (x[0], (x[1], x[2])))
+    return auths, hubs, degrees
 
 def normalize_rdd(rdd):
     rdd_norm_squared = rdd.map(lambda x: (0, x[1][0]*x[1][0])).reduceByKey(lambda x, y: x + y).collect()[0][1]
     rdd_norm = math.sqrt(rdd_norm_squared)
-    return rdd.map(lambda x: (x[0], (x[1][0] / rdd_norm, x[1][1], x[1][2])))
+    return rdd.map(lambda x: (x[0], (x[1][0] / rdd_norm, x[1][1])))
 
 conf = SparkConf().setMaster("local[*]")
 sc = SparkContext(conf=conf)
@@ -54,7 +55,7 @@ edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 #edges.saveAsTextFile("../outputs/edges.txt")
 #edgesT.saveAsTextFile("../outputs/edgesT.txt"
 
-auths, hubs = initialize_hits(nodesDF, edgesDF, num_nodes)
+auths, hubs, degrees = initialize_hits(nodesDF, edgesDF, num_nodes)
 
 print("Nodes:")
 print(nodes.take(10))
@@ -67,9 +68,18 @@ for i in range(num_iter):
     print("Iteration ", str(i+1))
 
     #Hub: for each node a, accumulate authority scores from all links of the form (a,b). Divide by each in-degree.
-    hubs = edgesT.join(auths).map(lambda x: (x[1][0], (x[1][1][0]/x[1][1][1], x[1][1][1], x[1][1][2]))).reduceByKey(lambda x, y: (x[0] + y[0], x[1], x[2])).mapValues(lambda score: (beta*score[0] + ((1-beta)/(2*num_nodes)), score[1], score[2]))
+    hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1][0]/x[1][1][1][0])) \
+    .reduceByKey(lambda x, y: x + y) \
+    .mapValues(lambda score: (beta*score + ((1-beta)/(2*num_nodes))))
+
+    hubs = hubs.join(degrees)
+
     # Authority: for each node b, accumulate hub scores from all links of the form (a,b). Divide by each out-degree.
-    auths = edges.join(hubs).map(lambda x: (x[1][0], (x[1][1][0]/x[1][1][2], x[1][1][1], x[1][1][2]))).reduceByKey(lambda x, y: (x[0] + y[0], x[1], x[2])).mapValues(lambda score: (beta*score[0] + ((1-beta)/(2*num_nodes)), score[1], score[2]))
+    auths = edges.join(hubs).map(lambda x: (x[1][0], x[1][1][0]/x[1][1][1][1])) \
+    .reduceByKey(lambda x, y: x + y) \
+    .mapValues(lambda score: beta*score + ((1-beta)/(2*num_nodes)))
+
+    auths = auths.join(degrees)
 
     # Normalize scores
     hubs = normalize_rdd(hubs)
