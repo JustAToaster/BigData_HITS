@@ -3,14 +3,27 @@ import math
 from random import sample
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, when
 import networkx as nx
 import matplotlib.pyplot as plt
 
-def initialize_hits(nodes, num_nodes):
-    auths = nodes.map(lambda node: (node[0], 1.0/math.sqrt(num_nodes)))
+def initialize_topic_specific_hits(nodesDF, edgesDF, num_topic_nodes):
+    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
+    .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
+    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
+    .select("dst_id", "in_degree").withColumnRenamed("dst_id", "id")
+
+    nodesDF_label = nodesDF.select("id", "topic_specific")
+
+    # Put in-degrees in edgesT and out-degrees in edges
+    edgesT = edgesDF.join(in_degreesDF, edgesDF.dst_id == in_degreesDF.id) \
+    .select("dst_id", "src_id", "in_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
+    edges = edgesDF.join(out_degreesDF, edgesDF.src_id == out_degreesDF.id) \
+    .select("src_id", "dst_id", "out_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
+    auths = nodesDF_label.rdd.map(lambda node: (node[0], 0 if node[1] == 0 else 1.0/(2*num_topic_nodes)))
+    
     hubs = auths
-    return auths, hubs
+    return auths, hubs, edges, edgesT, nodesDF_label.rdd
 
 def normalize_rdd(rdd):
     rdd_norm_squared = rdd.map(lambda x: (0, x[1]*x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
@@ -41,44 +54,43 @@ spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath)
 edgesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(edgesPath)
 
+nodesDF = nodesDF.withColumnRenamed("id:ID", "id")
+edgesDF = edgesDF.withColumnRenamed("src:START_ID", "src_id").withColumnRenamed("dst:END_ID", "dst_id")
+
 nodes = nodesDF.rdd
 num_nodes = nodes.count()
-edges = edgesDF.select("src:START_ID", "dst:END_ID").rdd.map(lambda edge: (edge[0], edge[1]))
+edges = edgesDF.select("src_id", "dst_id").rdd.map(lambda edge: (edge[0], edge[1]))
 edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 
-# Topic-specific nodes
-topic_nodes = nodesDF.filter(col("labels:LABEL") == topic_label).rdd
-num_topic_nodes = topic_nodes.count()
-print(num_topic_nodes)
+# Give label 1 to topic-specific nodes, 0 to the other nodes
+nodesDF = nodesDF.withColumn("topic_specific", when(nodesDF["labels:LABEL"] == topic_label, 1).otherwise(0))
+
+num_topic_nodes = nodesDF.where(col("topic_specific") == 1).rdd.count()
 
 #edges.saveAsTextFile("../outputs/edges.txt")
 #edgesT.saveAsTextFile("../outputs/edgesT.txt")
 
-auths, hubs = initialize_hits(nodes, num_nodes)
+auths, hubs, edges, edgesT, nodes_label = initialize_topic_specific_hits(nodesDF, edgesDF, num_topic_nodes)
 
 print("Nodes:")
 print(nodes.take(10))
 print("Edges: ")
 print(edges.take(10))
 
-hubSum = authSum = num_nodes/(math.sqrt(num_nodes))
-topic_authSum = num_topic_nodes/(math.sqrt(num_topic_nodes))
-
 for i in range(num_iter):
     print("Iteration ", str(i+1))
 
-    # Hub: for each node a, accumulate authority scores from all links of the form (a,b) and sum the contributions from the stochastic edges going to the topic-specific nodes
-    hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score + ((1-beta)/num_topic_nodes)*topic_authSum)
-    hubSum = hubs.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
-
-    # Authority: for each node b, accumulate hub scores from all links of the form (a,b)
-    auths = edges.join(hubs).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y).mapValues(lambda score: beta*score)
-
-    # For topic-specific authorities, sum contributions from stochastic edges coming from all nodes
-    topic_specific_auths = topic_nodes.join(auths).map(lambda x: (x[1][0], x[1][1] + ((1-beta)/num_topic_nodes)*hubSum))
-
-    # Merge back scores from topic-specific authorities
-    auths = auths.leftOuterJoin(topic_specific_auths).map(lambda x: (x[0], x[1][0] if x[1][1] is None else x[1][1]))
+    #Hub: for each node a, accumulate authority scores from all links of the form (a,b). Divide by each in-degree.
+    # For topic-specific hubs, sum contributions from stochastic edges.
+    hubs = edgesT.join(auths).map(lambda x: (x[1][0][0], x[1][1]/x[1][0][1])) \
+    .reduceByKey(lambda x, y: x + y).leftOuterJoin(nodes_label) \
+    .mapValues(lambda node: (beta*node[0] if node[1] == 0 else beta*node[0] + ((1-beta)/(2*num_topic_nodes))))
+    
+    # Authority: for each node b, accumulate hub scores from all links of the form (a,b). Divide by each out-degree.
+    # For topic-specific authorities, sum contributions from stochastic edges.
+    auths = edges.join(hubs).map(lambda x: (x[1][0][0], x[1][1]/x[1][0][1])) \
+    .reduceByKey(lambda x, y: x + y).leftOuterJoin(nodes_label) \
+    .mapValues(lambda node: (beta*node[0] if node[1] == 0 else beta*node[0] + ((1-beta)/(2*num_topic_nodes))))
     
     # Normalize scores
     hubs = normalize_rdd(hubs)

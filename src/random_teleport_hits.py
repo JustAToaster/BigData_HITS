@@ -8,12 +8,18 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 def initialize_hits(nodesDF, edgesDF, num_nodes):
-    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree").select("src_id", "out_degree").withColumnRenamed("src_id", "id")
-    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree").select("dst_id", "in_degree").withColumnRenamed("dst_id", "id")
+    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
+    .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
+    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
+    .select("dst_id", "in_degree").withColumnRenamed("dst_id", "id")
+
     # Put in-degrees in edgesT and out-degrees in edges
-    edgesT = edgesDF.join(in_degreesDF, edgesDF.dst_id == in_degreesDF.id).select("dst_id", "src_id", "in_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
-    edges = edgesDF.join(out_degreesDF, edgesDF.src_id == out_degreesDF.id).select("src_id", "dst_id", "out_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
+    edgesT = edgesDF.join(in_degreesDF, edgesDF.dst_id == in_degreesDF.id) \
+    .select("dst_id", "src_id", "in_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
+    edges = edgesDF.join(out_degreesDF, edgesDF.src_id == out_degreesDF.id) \
+    .select("src_id", "dst_id", "out_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
     auths = nodesDF.rdd.map(lambda node: (node[0], 1.0/math.sqrt(num_nodes)))
+
     hubs = auths
     return auths, hubs, edges, edgesT
 

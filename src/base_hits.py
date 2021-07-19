@@ -53,6 +53,11 @@ print(auths.take(10))
 for i in range(num_iter):
     print("Iteration ", str(i+1))
 
+    if i == 1:
+        hubs = edgesT.join(auths).saveAsTextFile("../outputs/testjoin.txt")
+        sc.stop()
+        exit(0)
+
     # Hub: for each node a, accumulate authority scores from all links of the form (a,b)
     hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1])).reduceByKey(lambda x, y: x + y)
     
