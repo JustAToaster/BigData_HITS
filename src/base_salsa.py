@@ -23,7 +23,7 @@ def transition_matrices(edgesDF, spark):
         H = spark.read.parquet("../outputs/SALSA/H_transition_matrix/*").rdd.map(lambda x: (x[0], (x[1][0], x[1][1])))
         return A, H
 
-    print("Computing transition matrices...")
+    print("Computing transition matrices and saving them to file...")
 
     out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
     .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
@@ -44,7 +44,6 @@ def transition_matrices(edgesDF, spark):
     H = WT_in_deg.join(W_out_deg).map(lambda x: ((x[1][0][0], x[1][1][0]), x[1][0][1]*x[1][1][1])) \
     .reduceByKey(lambda x, y: x + y).filter(lambda x: x[1] != 0).map(lambda x: (x[0][0], (x[0][1], x[1])))
 
-    print("Saving transition matrices to file...")
     A.toDF().write.format('parquet').save("../outputs/SALSA/A_transition_matrix")
     H.toDF().write.format('parquet').save("../outputs/SALSA/H_transition_matrix")
 

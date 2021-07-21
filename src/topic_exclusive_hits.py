@@ -26,7 +26,7 @@ edgesPath = '../data/edges_elab.csv'
 num_iter = 8
 topic_label = ""
 
-if len(sys.argv) >= 1:
+if len(sys.argv) >= 2:
     topic_label = sys.argv[1]
 if len(sys.argv) >= 3:
     num_iter = int(sys.argv[2])
@@ -45,12 +45,14 @@ edgesDF = edgesDF.withColumnRenamed("src:START_ID", "src_id").withColumnRenamed(
 
 nodes = nodesDF.rdd
 
-# Exclude edges involving nodes that are not of the type specified by topic_label
-edges = edgesDF.join(nodesDF, [edgesDF.src_id == nodesDF.id], "leftsemi") \
-    .join(nodesDF, [edgesDF.dst_id == nodesDF.id], "leftsemi").rdd.map(lambda edge: (edge[0], edge[1]))
+# Exclude edges involving at least a node that is not of the type specified by topic_label
+edges = edgesDF.join(nodesDF, [(edgesDF.src_id == nodesDF.id) & (edgesDF.dst_id == nodesDF.id)], "leftsemi")\
+.rdd.map(lambda edge: (edge[0], edge[1]))
 edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 
-# edges.saveAsTextFile("../outputs/edges.txt")
+edges.saveAsTextFile("../outputs/edges.txt")
+sc.stop()
+exit(0)
 # edgesT.saveAsTextFile("../outputs/edgesT.txt")
 
 auths, hubs = initialize_hits(nodes)
