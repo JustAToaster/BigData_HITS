@@ -50,11 +50,6 @@ edges = edgesDF.join(nodesDF, [(edgesDF.src_id == nodesDF.id) & (edgesDF.dst_id 
 .rdd.map(lambda edge: (edge[0], edge[1]))
 edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 
-edges.saveAsTextFile("../outputs/edges.txt")
-sc.stop()
-exit(0)
-# edgesT.saveAsTextFile("../outputs/edgesT.txt")
-
 auths, hubs = initialize_hits(nodes)
 
 print("Nodes:")
