@@ -83,13 +83,13 @@ for i in range(num_iter):
     #Hub: for each node a, accumulate authority scores from all links of the form (a,b). Divide by each in-degree.
     # For topic-specific hubs, sum contributions from stochastic edges.
     hubs = edgesT.join(auths).map(lambda x: (x[1][0][0], x[1][1]/x[1][0][1])) \
-    .reduceByKey(lambda x, y: x + y).leftOuterJoin(nodes_label) \
+    .reduceByKey(lambda x, y: x + y).join(nodes_label) \
     .mapValues(lambda node: (beta*node[0] if node[1] == 0 else beta*node[0] + ((1-beta)/(2*num_topic_nodes))))
     
     # Authority: for each node b, accumulate hub scores from all links of the form (a,b). Divide by each out-degree.
     # For topic-specific authorities, sum contributions from stochastic edges.
     auths = edges.join(hubs).map(lambda x: (x[1][0][0], x[1][1]/x[1][0][1])) \
-    .reduceByKey(lambda x, y: x + y).leftOuterJoin(nodes_label) \
+    .reduceByKey(lambda x, y: x + y).join(nodes_label) \
     .mapValues(lambda node: (beta*node[0] if node[1] == 0 else beta*node[0] + ((1-beta)/(2*num_topic_nodes))))
     
     # Normalize scores
