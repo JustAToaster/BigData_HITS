@@ -10,45 +10,6 @@ from pyspark.sql.functions import col
 
 from draw_graphs import *
 
-def initialize_salsa(nodes):
-    num_nodes = nodes.count()
-    auths = nodes.map(lambda node: (node[0], 1.0/num_nodes))
-    hubs = auths
-    return auths, hubs
-
-def query_dependent_transition_matrices(edgesDF, topic_label, spark):
-    if (os.path.isdir('../outputs/SALSA/' + topic_label + '_A_transition_matrix/') and os.path.isdir('../outputs/SALSA/' + topic_label + '_A_transition_matrix/')):
-        print("Loading transition matrices from file...")
-        A = spark.read.parquet("../outputs/SALSA/" + topic_label + "_A_transition_matrix/*").rdd.map(lambda x: (x[0], (x[1][0], x[1][1])))
-        H = spark.read.parquet("../outputs/SALSA/" + topic_label + "_H_transition_matrix/*").rdd.map(lambda x: (x[0], (x[1][0], x[1][1])))
-        return A, H
-
-    print("Computing transition matrices and saving them to file...")
-
-    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
-    .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
-    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
-    .select("dst_id", "in_degree").withColumnRenamed("dst_id", "id")
-
-    W_out_deg = edgesDF.join(out_degreesDF, edgesDF.src_id == out_degreesDF.id) \
-    .select("src_id", "dst_id", "out_degree").rdd.map(lambda x: (x[0], (x[1], 1.0/x[2] if x[2] != 0 else 0)))
-
-    WT_in_deg = edgesDF.join(in_degreesDF, edgesDF.dst_id == in_degreesDF.id) \
-    .select("dst_id", "src_id", "in_degree").rdd.map(lambda x: (x[0], (x[1], 1.0/x[2] if x[2] != 0 else 0)))
-
-    # A = W * W^T
-    A = W_out_deg.join(WT_in_deg).map(lambda x: ((x[1][0][0], x[1][1][0]), x[1][0][1]*x[1][1][1])) \
-    .reduceByKey(lambda x, y: x + y).filter(lambda x: x[1] != 0).map(lambda x: (x[0][0], (x[0][1], x[1])))
-
-    # H = W^T * W
-    H = WT_in_deg.join(W_out_deg).map(lambda x: ((x[1][0][0], x[1][1][0]), x[1][0][1]*x[1][1][1])) \
-    .reduceByKey(lambda x, y: x + y).filter(lambda x: x[1] != 0).map(lambda x: (x[0][0], (x[0][1], x[1])))
-
-    A.toDF().write.format('parquet').save("../outputs/SALSA/" + topic_label + "_A_transition_matrix")
-    H.toDF().write.format('parquet').save("../outputs/SALSA/" + topic_label + "_H_transition_matrix")
-
-    return A, H
-
 def normalize_rdd_sum(rdd):
     rdd_sum = rdd.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
     return rdd.map(lambda x: (x[0], x[1] / rdd_sum))
@@ -67,7 +28,7 @@ if len(sys.argv) >= 5:
     nodesPath = sys.argv[3]
     edgesPath = sys.argv[4]
 if len(sys.argv) == 1 or len(sys.argv) == 4 or len(sys.argv) > 5:
-    print("Usage: spark-submit query_dependent_salsa.py topic_label [num_iter] [nodes_csv] [edges_csv]")
+    print("Usage: spark-submit query_dependent_salsa.py topic_label [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath).withColumnRenamed("id:ID", "id")
@@ -84,31 +45,17 @@ edgesDF = edgesDF.withColumnRenamed("src:START_ID", "src_id").withColumnRenamed(
 # Exclude edges involving two nodes that are not of the type specified by topic_label
 edgesDF = edgesDF.join(topic_nodesDF, on=[(edgesDF.src_id == topic_nodesDF.id) | (edgesDF.dst_id == topic_nodesDF.id)], how="leftsemi")
 edges = edgesDF.rdd.map(lambda edge: (edge[0], edge[1]))
-edgesT = edges.map(lambda edge: (edge[1], edge[0]))
 
 # Get neighborhood graph nodes from edges
 nodesDF = nodesDF.select("id").join(edgesDF, on=[(edgesDF.src_id == nodesDF.id) | (edgesDF.dst_id == nodesDF.id)], how="leftsemi")
 nodes = nodesDF.rdd
 
+# Compute out-degrees and in-degrees (simplified SALSA)
+hubs = edges.map(lambda edge: (edge[0], 1)).reduceByKey(lambda x, y: x + y)
+auths = edges.map(lambda edge: (edge[1], 1)).reduceByKey(lambda x, y: x + y)
 
-# Get transition matrices
-A, H = query_dependent_transition_matrices(edgesDF, topic_label, spark)
-
-auths, hubs = initialize_salsa(nodes)
-
-# Apply power iteration to H and A
-for i in range(num_iter):
-    print("Iteration ", str(i+1))
-
-    # Hub surfer
-    hubs = H.join(hubs).map(lambda x: (x[1][0][0], x[1][0][1]*x[1][1])).reduceByKey(lambda x, y: x + y)
-    
-    # Authority surfer
-    auths = A.join(auths).map(lambda x: (x[1][0][0], x[1][0][1]*x[1][1])).reduceByKey(lambda x, y: x + y)
-
-    # Normalize scores
-    hubs = normalize_rdd_sum(hubs)
-    auths = normalize_rdd_sum(auths)
+hubs = normalize_rdd_sum(hubs)
+auths = normalize_rdd_sum(auths)
 
 hubs = hubs.sortBy(lambda x: x[1], ascending=False)
 auths = auths.sortBy(lambda x: x[1], ascending=False)
