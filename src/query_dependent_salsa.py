@@ -18,16 +18,13 @@ conf = SparkConf().setMaster("local[*]")
 sc = SparkContext(conf=conf)
 nodesPath = '../data/nodes_elab.csv'
 edgesPath = '../data/edges_elab.csv'
-num_iter = 8
 
 if len(sys.argv) >= 2:
     topic_label = sys.argv[1]
-if len(sys.argv) >= 3:
-    num_iter = int(sys.argv[2])
-if len(sys.argv) >= 5:
-    nodesPath = sys.argv[3]
-    edgesPath = sys.argv[4]
-if len(sys.argv) == 1 or len(sys.argv) == 4 or len(sys.argv) > 5:
+if len(sys.argv) >= 4:
+    nodesPath = sys.argv[2]
+    edgesPath = sys.argv[3]
+if len(sys.argv) == 1 or len(sys.argv) > 4:
     print("Usage: spark-submit query_dependent_salsa.py topic_label [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()

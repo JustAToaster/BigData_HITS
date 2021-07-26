@@ -18,14 +18,11 @@ conf = SparkConf().setMaster("local[*]")
 sc = SparkContext(conf=conf)
 nodesPath = '../data/nodes_elab.csv'
 edgesPath = '../data/edges_elab.csv'
-num_iter = 8
 
-if len(sys.argv) >= 2:
-    num_iter = int(sys.argv[1])
-if len(sys.argv) >= 4:
-    nodesPath = sys.argv[2]
-    edgesPath = sys.argv[3]
-if len(sys.argv) == 3 or len(sys.argv) > 4:
+if len(sys.argv) >= 3:
+    nodesPath = sys.argv[1]
+    edgesPath = sys.argv[2]
+if len(sys.argv) == 2 or len(sys.argv) > 3:
     print("Usage: spark-submit base_salsa.py [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()
@@ -37,12 +34,9 @@ edgesDF = edgesDF.select("src:START_ID", "dst:END_ID").withColumnRenamed("src:ST
 nodes = nodesDF.rdd
 edges = edgesDF.rdd.map(lambda edge: (edge[0], edge[1]))
 
-out_nodes = edges.map(lambda edge: (edge[0], 1))
-in_nodes = edges.map(lambda edge: (edge[1], 1))
-
 # Compute out-degrees and in-degrees (simplified SALSA)
-hubs = out_nodes.reduceByKey(lambda x, y: x + y)
-auths = in_nodes.reduceByKey(lambda x, y: x + y)
+hubs = edges.map(lambda edge: (edge[0], 1)).reduceByKey(lambda x, y: x + y)
+auths = edges.map(lambda edge: (edge[1], 1)).reduceByKey(lambda x, y: x + y)
 
 hubs = normalize_rdd_sum(hubs)
 auths = normalize_rdd_sum(auths)
