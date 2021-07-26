@@ -10,45 +10,6 @@ from pyspark.sql.functions import col
 
 from draw_graphs import *
 
-def initialize_salsa(nodes):
-    num_nodes = nodes.count()
-    auths = nodes.map(lambda node: (node[0], 1.0/num_nodes))
-    hubs = auths
-    return auths, hubs
-
-def transition_matrices(edgesDF, spark):
-    if (os.path.isdir('../outputs/SALSA/A_transition_matrix/') and os.path.isdir('../outputs/SALSA/A_transition_matrix/')):
-        print("Loading transition matrices from file...")
-        A = spark.read.parquet("../outputs/SALSA/A_transition_matrix/*").rdd.map(lambda x: (x[0], (x[1][0], x[1][1])))
-        H = spark.read.parquet("../outputs/SALSA/H_transition_matrix/*").rdd.map(lambda x: (x[0], (x[1][0], x[1][1])))
-        return A, H
-
-    print("Computing transition matrices and saving them to file...")
-
-    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
-    .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
-    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
-    .select("dst_id", "in_degree").withColumnRenamed("dst_id", "id")
-
-    W_out_deg = edgesDF.join(out_degreesDF, edgesDF.src_id == out_degreesDF.id) \
-    .select("src_id", "dst_id", "out_degree").rdd.map(lambda x: (x[0], (x[1], 1.0/x[2] if x[2] != 0 else 0)))
-
-    WT_in_deg = edgesDF.join(in_degreesDF, edgesDF.dst_id == in_degreesDF.id) \
-    .select("dst_id", "src_id", "in_degree").rdd.map(lambda x: (x[0], (x[1], 1.0/x[2] if x[2] != 0 else 0)))
-
-    # A = W * W^T
-    A = W_out_deg.join(WT_in_deg).map(lambda x: ((x[1][0][0], x[1][1][0]), x[1][0][1]*x[1][1][1])) \
-    .reduceByKey(lambda x, y: x + y).filter(lambda x: x[1] != 0).map(lambda x: (x[0][0], (x[0][1], x[1])))
-
-    # H = W^T * W
-    H = WT_in_deg.join(W_out_deg).map(lambda x: ((x[1][0][0], x[1][1][0]), x[1][0][1]*x[1][1][1])) \
-    .reduceByKey(lambda x, y: x + y).filter(lambda x: x[1] != 0).map(lambda x: (x[0][0], (x[0][1], x[1])))
-
-    A.toDF().write.format('parquet').save("../outputs/SALSA/A_transition_matrix")
-    H.toDF().write.format('parquet').save("../outputs/SALSA/H_transition_matrix")
-
-    return A, H
-
 def normalize_rdd_sum(rdd):
     rdd_sum = rdd.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
     return rdd.map(lambda x: (x[0], x[1] / rdd_sum))
@@ -65,7 +26,7 @@ if len(sys.argv) >= 4:
     nodesPath = sys.argv[2]
     edgesPath = sys.argv[3]
 if len(sys.argv) == 3 or len(sys.argv) > 4:
-    print("Usage: spark-submit base_salsa.py [num_iter] [nodes_csv] [edges_csv]")
+    print("Usage: spark-submit base_salsa.py [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath)
@@ -76,24 +37,15 @@ edgesDF = edgesDF.select("src:START_ID", "dst:END_ID").withColumnRenamed("src:ST
 nodes = nodesDF.rdd
 edges = edgesDF.rdd.map(lambda edge: (edge[0], edge[1]))
 
-# Get transition matrices
-A, H = transition_matrices(edgesDF, spark)
+out_nodes = edges.map(lambda edge: (edge[0], 1))
+in_nodes = edges.map(lambda edge: (edge[1], 1))
 
-auths, hubs = initialize_salsa(nodes)
+# Compute out-degrees and in-degrees (simplified SALSA)
+hubs = out_nodes.reduceByKey(lambda x, y: x + y)
+auths = in_nodes.reduceByKey(lambda x, y: x + y)
 
-# Apply power iteration to H and A
-for i in range(num_iter):
-    print("Iteration ", str(i+1))
-
-    # Hub surfer
-    hubs = H.join(hubs).map(lambda x: (x[1][0][0], x[1][0][1]*x[1][1])).reduceByKey(lambda x, y: x + y)
-    
-    # Authority surfer
-    auths = A.join(auths).map(lambda x: (x[1][0][0], x[1][0][1]*x[1][1])).reduceByKey(lambda x, y: x + y)
-
-    # Normalize scores
-    hubs = normalize_rdd_sum(hubs)
-    auths = normalize_rdd_sum(auths)
+hubs = normalize_rdd_sum(hubs)
+auths = normalize_rdd_sum(auths)
 
 hubs = hubs.sortBy(lambda x: x[1], ascending=False)
 auths = auths.sortBy(lambda x: x[1], ascending=False)
@@ -102,9 +54,9 @@ auths = auths.sortBy(lambda x: x[1], ascending=False)
 hubs.coalesce(1, False).saveAsTextFile("../outputs/SALSA/baseSALSA_hub_scores.txt")
 auths.coalesce(1, False).saveAsTextFile("../outputs/SALSA/baseSALSA_authority_scores.txt")
 
-# Take the top 50 hubs and authorities and multiply their score by 10 to draw them more clearly
-hubs_dict = dict(hubs.mapValues(lambda score: score*10).take(50))
-auths_dict = dict(auths.mapValues(lambda score: score*10).take(50))
+# Take the top 50 hubs and authorities and multiply their score by 20 to draw them more clearly
+hubs_dict = dict(hubs.mapValues(lambda score: score*20).take(50))
+auths_dict = dict(auths.mapValues(lambda score: score*20).take(50))
 
 # Sample nodes and edges from the graph
 nodes_dict = dict(hubs.sample(False, 0.01, 81).collect())
