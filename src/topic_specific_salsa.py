@@ -7,7 +7,7 @@ from pyspark.sql.functions import col, when
 
 from draw_graphs import *
 
-def initialize_topic_specific_hits(nodesDF, edgesDF, num_topic_nodes):
+def initialize_topic_specific_salsa(nodesDF, edgesDF, num_topic_nodes):
     out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
     .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
     in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
@@ -25,10 +25,9 @@ def initialize_topic_specific_hits(nodesDF, edgesDF, num_topic_nodes):
     hubs = auths
     return auths, hubs, edges, edgesT, nodesDF_label.rdd
 
-def normalize_rdd(rdd):
-    rdd_norm_squared = rdd.map(lambda x: (0, x[1]*x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
-    rdd_norm = math.sqrt(rdd_norm_squared)
-    return rdd.map(lambda x: (x[0], x[1] / rdd_norm))
+def normalize_rdd_sum(rdd):
+    rdd_sum = rdd.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
+    return rdd.map(lambda x: (x[0], x[1] / rdd_sum))
 
 conf = SparkConf().setMaster("local[*]")
 sc = SparkContext(conf=conf)
@@ -48,7 +47,7 @@ if len(sys.argv) >= 6:
     nodesPath = sys.argv[4]
     edgesPath = sys.argv[5]
 if len(sys.argv) == 1 or len(sys.argv) == 5 or len(sys.argv) > 6:
-    print("Usage: spark-submit random_teleport_hits.py topic_label [num_iter] [beta] [nodes_csv] [edges_csv]")
+    print("Usage: spark-submit topic_specific_salsa.py topic_label [num_iter] [beta] [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath)
@@ -70,7 +69,7 @@ num_topic_nodes = nodesDF.where(col("topic_specific") == 1).rdd.count()
 #edges.saveAsTextFile("../outputs/edges.txt")
 #edgesT.saveAsTextFile("../outputs/edgesT.txt")
 
-auths, hubs, edges, edgesT, nodes_label = initialize_topic_specific_hits(nodesDF, edgesDF, num_topic_nodes)
+auths, hubs, edges, edgesT, nodes_label = initialize_topic_specific_salsa(nodesDF, edgesDF, num_topic_nodes)
 
 print("Nodes:")
 print(nodes.take(10))
@@ -93,15 +92,15 @@ for i in range(num_iter):
     .mapValues(lambda node: (beta*node[0] if node[1] == 0 else beta*node[0] + ((1-beta)/(2*num_topic_nodes))))
     
     # Normalize scores
-    hubs = normalize_rdd(hubs)
-    auths = normalize_rdd(auths)
+    hubs = normalize_rdd_sum(hubs)
+    auths = normalize_rdd_sum(auths)
 
 hubs = hubs.sortBy(lambda x: x[1], ascending=False)
 auths = auths.sortBy(lambda x: x[1], ascending=False)
 
 # For simplicity's sake, scores are saved as a single file (not recommended with a big dataset in a distributed environment)
-hubs.coalesce(1, False).saveAsTextFile("../outputs/" + topic_label + "_specific_hub_scores.txt")
-auths.coalesce(1, False).saveAsTextFile("../outputs/" + topic_label + "_specific_authority_scores.txt")
+hubs.coalesce(1, False).saveAsTextFile("../outputs/SALSA/" + topic_label + "_specific_hub_scores.txt")
+auths.coalesce(1, False).saveAsTextFile("../outputs/SALSA/" + topic_label + "_specific_authority_scores.txt")
 
 # Take the top 50 hubs and authorities
 hubs_dict = dict(hubs.take(50))
@@ -122,4 +121,4 @@ print(list(auths_dict.items())[:10])
 
 print("Drawing graphs...")
 
-draw_graphs(topic_label + "_specific_HITS", edges_list, nodes_dict, hubs_dict, auths_dict)
+draw_graphs(topic_label + "_specific_SALSA", edges_list, nodes_dict, hubs_dict, auths_dict)

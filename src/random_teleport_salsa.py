@@ -7,7 +7,7 @@ from pyspark.sql.functions import col
 
 from draw_graphs import *
 
-def initialize_hits(nodesDF, edgesDF, num_nodes):
+def initialize_salsa(nodesDF, edgesDF, num_nodes):
     out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
     .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
     in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
@@ -23,10 +23,9 @@ def initialize_hits(nodesDF, edgesDF, num_nodes):
     hubs = auths
     return auths, hubs, edges, edgesT
 
-def normalize_rdd(rdd):
-    rdd_norm_squared = rdd.map(lambda x: (0, x[1]*x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
-    rdd_norm = math.sqrt(rdd_norm_squared)
-    return rdd.map(lambda x: (x[0], x[1] / rdd_norm))
+def normalize_rdd_sum(rdd):
+    rdd_sum = rdd.map(lambda x: (0, x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
+    return rdd.map(lambda x: (x[0], x[1] / rdd_sum))
 
 conf = SparkConf().setMaster("local[*]")
 sc = SparkContext(conf=conf)
@@ -43,7 +42,7 @@ if len(sys.argv) >= 5:
     nodesPath = sys.argv[3]
     edgesPath = sys.argv[4]
 if len(sys.argv) == 4 or len(sys.argv) > 5:
-    print("Usage: spark-submit random_teleport_hits.py [num_iter] [beta] [nodes_csv] [edges_csv]")
+    print("Usage: spark-submit random_teleport_salsa.py [num_iter] [beta] [nodes_csv] [edges_csv]")
 
 spark = SparkSession.builder.appName("Python").getOrCreate()
 nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(nodesPath)
@@ -59,7 +58,7 @@ edgesDF = edgesDF.select("src_id", "dst_id")
 #edges.saveAsTextFile("../outputs/edges.txt")
 #edgesT.saveAsTextFile("../outputs/edgesT.txt"
 
-auths, hubs, edges, edgesT = initialize_hits(nodesDF, edgesDF, num_nodes)
+auths, hubs, edges, edgesT = initialize_salsa(nodesDF, edgesDF, num_nodes)
 
 print("Nodes:")
 print(nodes.take(10))
@@ -82,15 +81,15 @@ for i in range(num_iter):
     .mapValues(lambda score: beta*score + ((1-beta)/(2*num_nodes)))
 
     # Normalize scores
-    hubs = normalize_rdd(hubs)
-    auths = normalize_rdd(auths)
+    hubs = normalize_rdd_sum(hubs)
+    auths = normalize_rdd_sum(auths)
 
 hubs = hubs.sortBy(lambda x: x[1], ascending=False)
 auths = auths.sortBy(lambda x: x[1], ascending=False)
 
 # For simplicity's sake, scores are saved as a single file (not recommended with a big dataset in a distributed environment)
-hubs.coalesce(1, False).saveAsTextFile("../outputs/teleport_hub_scores.txt")
-auths.coalesce(1, False).saveAsTextFile("../outputs/teleport_authority_scores.txt")
+hubs.coalesce(1, False).saveAsTextFile("../outputs/SALSA/teleport_hub_scores.txt")
+auths.coalesce(1, False).saveAsTextFile("../outputs/SALSA/teleport_authority_scores.txt")
 
 # Take the top 50 hubs and authorities
 hubs_dict = dict((hubs).take(50))
@@ -111,4 +110,4 @@ print(list(auths_dict.items())[:10])
 
 print("Drawing graphs...")
 
-draw_graphs("teleportHITS", edges_list, nodes_dict, hubs_dict, auths_dict)
+draw_graphs("teleportSALSA", edges_list, nodes_dict, hubs_dict, auths_dict)
