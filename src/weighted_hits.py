@@ -42,25 +42,9 @@ edgesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').c
 
 nodes = nodesDF.rdd
 edges = edgesDF.rdd.map(lambda edge: (edge[0], (edge[1], edge[2])))
-
-# To build the transposed edge matrix with weights, we first transpose the dataframe with edges (a,b) to (b,a)
-edgesT_DF = edgesDF.withColumnRenamed("src:START_ID", "dst:END_ID2") \
-    .withColumnRenamed("dst:END_ID", "src:START_ID") \
-    .withColumnRenamed("dst:END_ID2", "dst:END_ID") \
-    .select("src:START_ID", "dst:END_ID")
-# Then we join with the original dataframe with weights and fill non present returning edges with 0
-edgesT = edgesT_DF.join(edgesDF, ['src:START_ID', 'dst:END_ID'], how="leftouter") \
-    .na.fill(0).rdd.map(lambda edge: (edge[0], (edge[1], edge[2])))
-
-#edges.saveAsTextFile("../outputs/edges.txt")
-#edgesT.saveAsTextFile("../outputs/edgesT.txt")
+edgesT = edgesDF.rdd.map(lambda edge: (edge[1], (edge[0], edge[2])))
 
 auths, hubs = initialize_hits(nodes)
-
-print("Hub scores:")
-print(hubs.take(10))
-print("Authority scores:")
-print(auths.take(10))
 
 for i in range(num_iter):
     print("Iteration ", str(i+1))
