@@ -7,11 +7,21 @@ from pyspark.sql.functions import col
 
 from draw_graphs import *
 
-def initialize_hits(nodes):
-    num_nodes = nodes.count()
-    auths = nodes.map(lambda node: (node[0], 1.0/math.sqrt(num_nodes)))
+def initialize_hits(nodesDF, edgesDF, num_nodes):
+    out_degreesDF = edgesDF.groupBy("src_id").count().withColumnRenamed("count", "out_degree") \
+    .select("src_id", "out_degree").withColumnRenamed("src_id", "id")
+    in_degreesDF = edgesDF.groupBy("dst_id").count().withColumnRenamed("count", "in_degree") \
+    .select("dst_id", "in_degree").withColumnRenamed("dst_id", "id")
+
+    # Put in-degrees in edgesT and out-degrees in edges
+    edgesT = edgesDF.join(in_degreesDF, edgesDF.dst_id == in_degreesDF.id) \
+    .select("dst_id", "src_id", "in_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
+    edges = edgesDF.join(out_degreesDF, edgesDF.src_id == out_degreesDF.id) \
+    .select("src_id", "dst_id", "out_degree").rdd.map(lambda x: (x[0], (x[1], x[2])))
+    auths = nodesDF.rdd.map(lambda node: (node[0], 1.0/math.sqrt(num_nodes)))
+
     hubs = auths
-    return auths, hubs
+    return auths, hubs, edges, edgesT
 
 def normalize_rdd(rdd):
     rdd_norm_squared = rdd.map(lambda x: (0, x[1]*x[1])).reduceByKey(lambda x, y: x + y).collect()[0][1]
@@ -40,17 +50,16 @@ nodesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').c
 edgesDF = spark.read.options(header='True', inferSchema='True', delimiter=',').csv(edgesPath)
 
 nodesDF = nodesDF.withColumnRenamed("id:ID", "id").select("id")
+edgesDF = edgesDF.withColumnRenamed("src:START_ID", "src_id").withColumnRenamed("dst:END_ID", "dst_id")
 
 nodes = nodesDF.rdd
 num_nodes = nodes.count()
-
-edges = edgesDF.select("src:START_ID", "dst:END_ID").rdd.map(lambda edge: (edge[0], edge[1]))
-edgesT = edges.map(lambda edge: (edge[1], edge[0]))
+edgesDF = edgesDF.select("src_id", "dst_id")
 
 #edges.saveAsTextFile("../outputs/edges.txt")
 #edgesT.saveAsTextFile("../outputs/edgesT.txt"
 
-auths, hubs = initialize_hits(nodes)
+auths, hubs, edges, edgesT = initialize_hits(nodesDF, edgesDF, num_nodes)
 
 print("Nodes:")
 print(nodes.take(10))
@@ -62,17 +71,15 @@ print(edges.take(10))
 for i in range(num_iter):
     print("Iteration ", str(i+1))
 
-    # Hub: for each node a, accumulate authority scores from all links of the form (a,b).
-    # Sum contribution from stochastic edges.
-    hubs = edgesT.join(auths).map(lambda x: (x[1][0], x[1][1])) \
+    #Hub: for each node a, accumulate authority scores from all links of the form (a,b). Divide by each in-degree.
+    hubs = edgesT.join(auths).map(lambda x: (x[1][0][0], x[1][1]/x[1][0][1])) \
     .reduceByKey(lambda x, y: x + y) \
-    .mapValues(lambda score: (beta*score + ((1-beta)/num_nodes)))
+    .mapValues(lambda score: (beta*score + ((1-beta)/(2*num_nodes))))
 
-    # Authority: for each node b, accumulate hub scores from all links of the form (a,b).
-    # Sum contribution from stochastic edges.
-    auths = edges.join(hubs).map(lambda x: (x[1][0], x[1][1])) \
+    # Authority: for each node b, accumulate hub scores from all links of the form (a,b). Divide by each out-degree.
+    auths = edges.join(hubs).map(lambda x: (x[1][0][0], x[1][1]/x[1][0][1])) \
     .reduceByKey(lambda x, y: x + y) \
-    .mapValues(lambda score: beta*score + ((1-beta)/num_nodes))
+    .mapValues(lambda score: beta*score + ((1-beta)/(2*num_nodes)))
 
     # Normalize scores
     hubs = normalize_rdd(hubs)
